@@ -1,0 +1,84 @@
+# Access-control audit
+
+Generated 2026-09-30T16:59:42.305Z by `npm run check:access` (scripts/check-access-control.ts) against the production build (npm run build, then npm start) at http://localhost:3004.
+
+Two real users, alice and bob (seeded, separate sessions). Every row is one attempt made over real HTTP. The script creates alice's project through her own session, then attacks it as bob. Rows marked CONTROL show the setup is valid (the owner can do the thing, so a refusal for bob means something). Pass means **no cross-user access was possible**: no other-user data in the response, nothing changed or deleted, no audit row written by a refused attempt, and the refusal for a real-but-foreign id is indistinguishable from the refusal for an id that does not exist.
+
+**Result: 67 of 67 attempts pass, 0 fail.**
+
+Notes on reading the table:
+- Pages answer a missing or invalid session with a redirect to /sign-in (a page has no 401 to show a browser); API routes answer 401. Neither carries any project data.
+- Pages answer a signed-in user's request for a project they don't own with HTTP 403; API routes answer 403. The page text and the API body are the same whether the id is someone else's, malformed, or nonexistent.
+- "Audit rows added" is counted in audit_log before and after each attempt.
+- Page responses are compared after removing the id the caller typed and Next.js's per-request random token. Next.js writes the requested path into the page payload with length prefixes, so pages differ if the caller types ids of different lengths; that is the caller's own input, so each guess is compared with a nonexistent id of the SAME length (and, for ids as long as a real public_id, with the wrong-owner page itself).
+- Redirect bodies and 403 page bodies are checked for alice's title, description, public_id, internal ids and email; none appear.
+
+| # | Method and path | What was attempted | What happened | Result |
+|---|---|---|---|---|
+| 1 | `GET /projects/[publicId]` | CONTROL: alice opens her own project with her real public_id | 200; page shows her title and description | pass |
+| 2 | `GET /projects` | CONTROL: alice lists her projects | 200; her project is listed, bob's is not | pass |
+| 3 | `GET /projects` | bob lists his projects | 200; shows his own project; none of alice's title, description, public_id or ids appear (leaks: 0) | pass |
+| 4 | `GET /projects?…` | bob adds user_id query parameter set to alice's internal user id | 200; still bob's list only (leaks: 0) | pass |
+| 5 | `GET /projects?…` | bob adds userId query parameter set to alice's internal user id | 200; still bob's list only (leaks: 0) | pass |
+| 6 | `GET /projects?…` | bob adds owner query parameter set to alice's email | 200; still bob's list only (leaks: 0) | pass |
+| 7 | `GET /projects/[publicId]` | bob requests alice's project with her REAL public_id (taken from her session) | 403; page carries the 403 "Project not available" view and no project data; leaks: 0 | pass |
+| 8 | `GET /projects/[publicId]` | bob requests alice's public_id + 1 (incremented) | 403; identical to the response for a nonexistent id of the same length: yes; identical to the wrong-owner page: yes; leaks: 0 | pass |
+| 9 | `GET /projects/[publicId]` | bob requests alice's public_id − 1 (decremented) | 403; identical to the response for a nonexistent id of the same length: yes; identical to the wrong-owner page: yes; leaks: 0 | pass |
+| 10 | `GET /projects/[publicId]` | bob requests public_id-shaped random string that exists for nobody | 403; identical to the response for a nonexistent id of the same length: yes; identical to the wrong-owner page: yes; leaks: 0 | pass |
+| 11 | `GET /projects/[publicId]` | bob requests alice's public_id in UPPER case | 403; identical to the response for a nonexistent id of the same length: yes; identical to the wrong-owner page: yes; leaks: 0 | pass |
+| 12 | `GET /projects/[publicId]` | bob requests alice's project's raw database id (uuid primary key) | 403; identical to the response for a nonexistent id of the same length: yes; identical to the wrong-owner page: yes; leaks: 0 | pass |
+| 13 | `GET /projects/[publicId]` | bob requests alice's raw user id (uuid) | 403; identical to the response for a nonexistent id of the same length: yes; identical to the wrong-owner page: yes; leaks: 0 | pass |
+| 14 | `GET /projects/[publicId]` | bob requests SQL-injection string as the id (' OR '1'='1) | 403; identical to the response for a nonexistent id of the same length: yes; leaks: 0 | pass |
+| 15 | `GET /projects/[publicId]` | bob requests path traversal as the id (..%2F..%2Fprojects) | 403; identical to the response for a nonexistent id of the same length: yes; leaks: 0 | pass |
+| 16 | `GET /projects/[publicId]` | bob requests too-short id (abc) | 403; identical to the response for a nonexistent id of the same length: yes; leaks: 0 | pass |
+| 17 | `GET /projects/[publicId]` | bob requests alice's public_id with a trailing space (%20) | 403; identical to the response for a nonexistent id of the same length: yes; leaks: 0 | pass |
+| 18 | `DELETE /api/projects/[publicId]` | bob sends DELETE for alice's real public_id with curl-style HTTP, no UI | 403 {"error":{"code":"FORBIDDEN","message":"You don't have access to that project."}}; alice's project intact: true; audit rows added: 0 | pass |
+| 19 | `DELETE /api/projects/[publicId]` | bob sends DELETE with alice's public_id + 1 | 403 {"error":{"code":"FORBIDDEN","message":"You don't have access to that project."}}; byte-identical to the wrong-owner response: yes; alice's project intact; audit rows added: 0 | pass |
+| 20 | `DELETE /api/projects/[publicId]` | bob sends DELETE with alice's public_id − 1 | 403 {"error":{"code":"FORBIDDEN","message":"You don't have access to that project."}}; byte-identical to the wrong-owner response: yes; alice's project intact; audit rows added: 0 | pass |
+| 21 | `DELETE /api/projects/[publicId]` | bob sends DELETE with random public_id-shaped string that exists for nobody | 403 {"error":{"code":"FORBIDDEN","message":"You don't have access to that project."}}; byte-identical to the wrong-owner response: yes; alice's project intact; audit rows added: 0 | pass |
+| 22 | `DELETE /api/projects/[publicId]` | bob sends DELETE with alice's public_id in UPPER case | 403 {"error":{"code":"FORBIDDEN","message":"You don't have access to that project."}}; byte-identical to the wrong-owner response: yes; alice's project intact; audit rows added: 0 | pass |
+| 23 | `DELETE /api/projects/[publicId]` | bob sends DELETE with alice's project's raw database id (uuid primary key) | 403 {"error":{"code":"FORBIDDEN","message":"You don't have access to that project."}}; byte-identical to the wrong-owner response: yes; alice's project intact; audit rows added: 0 | pass |
+| 24 | `DELETE /api/projects/[publicId]` | bob sends DELETE with SQL-injection string as the id (' OR '1'='1) | 403 {"error":{"code":"FORBIDDEN","message":"You don't have access to that project."}}; byte-identical to the wrong-owner response: yes; alice's project intact; audit rows added: 0 | pass |
+| 25 | `DELETE /api/projects/[publicId]` | bob sends DELETE with too-short id (abc) | 403 {"error":{"code":"FORBIDDEN","message":"You don't have access to that project."}}; byte-identical to the wrong-owner response: yes; alice's project intact; audit rows added: 0 | pass |
+| 26 | `DELETE /api/projects/[publicId]` | bob sends DELETE with alice's real public_id plus spoofed X-User-Id / X-Forwarded-User headers naming alice | 403 {"error":{"code":"FORBIDDEN","message":"You don't have access to that project."}}; byte-identical to the wrong-owner response: yes; alice's project intact; audit rows added: 0 | pass |
+| 27 | `DELETE /api/projects/[publicId]` | bob's own valid session, but the request carries a foreign Origin header (cross-site request) | 403 {"error":{"code":"FORBIDDEN_ORIGIN","message":"This request's origin is not allowed."}}; bob's own project still exists: true; audit rows added: 0 | pass |
+| 28 | `PATCH /api/projects/[publicId]` | bob tries a method the app does not define (there is no edit route and no list/read API) | 405; alice's project unchanged: true; leaks: 0 | pass |
+| 29 | `PUT /api/projects/[publicId]` | bob tries a method the app does not define (there is no edit route and no list/read API) | 405; alice's project unchanged: true; leaks: 0 | pass |
+| 30 | `GET /api/projects/[publicId]` | bob tries a method the app does not define (there is no edit route and no list/read API) | 405; alice's project unchanged: true; leaks: 0 | pass |
+| 31 | `GET /api/projects` | bob tries a method the app does not define (there is no edit route and no list/read API) | 405; alice's project unchanged: true; leaks: 0 | pass |
+| 32 | `POST /api/projects` | bob posts a valid project whose body also contains user_id = alice's internal user id | 201; created project's owner in the database is bob: true; response keys: publicId, title, description, createdAt | pass |
+| 33 | `POST /api/projects` | bob posts a valid project whose body also contains userId (camelCase) = alice's internal user id | 201; owner in the database is bob: true | pass |
+| 34 | `POST /api/projects` | bob posts a project naming alice's project's raw id and public_id in the body, trying to overwrite it | 201; a NEW project with a different public_id was created for bob: true; alice's project unchanged: true | pass |
+| 35 | `POST /api/projects` | bob's valid session, but the request carries a foreign Origin header | 403 {"error":{"code":"FORBIDDEN_ORIGIN","message":"This request's origin is not allowed."}} | pass |
+| 36 | `GET /projects` | CONTROL, after bob's POST attempts: alice's list contains only her own project | 200; none of bob's planted titles appear in alice's list | pass |
+| 37 | `GET /projects` | replay with no session cookie at all | 307 redirect to /sign-in?next=%2Fprojects; body 25 bytes (Next.js's redirect page), no project data; alice's project intact, no audit row added | pass |
+| 38 | `GET /projects` | replay with a forged session cookie (random 43-character token) | 307 redirect to /sign-in; body 8193 bytes (Next.js's redirect page), no project data; alice's project intact, no audit row added | pass |
+| 39 | `GET /projects` | replay with an empty session cookie value | 307 redirect to /sign-in; body 8193 bytes (Next.js's redirect page), no project data; alice's project intact, no audit row added | pass |
+| 40 | `GET /projects` | replay with alice's real token with its last character changed | 307 redirect to /sign-in; body 8193 bytes (Next.js's redirect page), no project data; alice's project intact, no audit row added | pass |
+| 41 | `GET /projects` | replay with an expired session (real row in the database, expires_at one minute ago) | 307 redirect to /sign-in; body 8193 bytes (Next.js's redirect page), no project data; alice's project intact, no audit row added | pass |
+| 42 | `GET /projects` | replay with a session token replayed after the user signed out | 307 redirect to /sign-in; body 8193 bytes (Next.js's redirect page), no project data; alice's project intact, no audit row added | pass |
+| 43 | `POST /api/projects` | replay with no session cookie at all | 401 {"error":{"code":"UNAUTHENTICATED","message":"You must be signed in."}}; alice's project intact, no audit row added | pass |
+| 44 | `POST /api/projects` | replay with a forged session cookie (random 43-character token) | 401 {"error":{"code":"UNAUTHENTICATED","message":"You must be signed in."}}; alice's project intact, no audit row added | pass |
+| 45 | `POST /api/projects` | replay with an empty session cookie value | 401 {"error":{"code":"UNAUTHENTICATED","message":"You must be signed in."}}; alice's project intact, no audit row added | pass |
+| 46 | `POST /api/projects` | replay with alice's real token with its last character changed | 401 {"error":{"code":"UNAUTHENTICATED","message":"You must be signed in."}}; alice's project intact, no audit row added | pass |
+| 47 | `POST /api/projects` | replay with an expired session (real row in the database, expires_at one minute ago) | 401 {"error":{"code":"UNAUTHENTICATED","message":"You must be signed in."}}; alice's project intact, no audit row added | pass |
+| 48 | `POST /api/projects` | replay with a session token replayed after the user signed out | 401 {"error":{"code":"UNAUTHENTICATED","message":"You must be signed in."}}; alice's project intact, no audit row added | pass |
+| 49 | `GET /projects/[publicId]` | replay with no session cookie at all | 307 redirect to /sign-in?next=%2Fprojects%2F13b7f2d89b7d43569e89bec1876fac07; body 60 bytes (Next.js's redirect page), no project data; alice's project intact, no audit row added | pass |
+| 50 | `GET /projects/[publicId]` | replay with a forged session cookie (random 43-character token) | 307 redirect to /sign-in; body 9535 bytes (Next.js's redirect page), no project data; alice's project intact, no audit row added | pass |
+| 51 | `GET /projects/[publicId]` | replay with an empty session cookie value | 307 redirect to /sign-in; body 9535 bytes (Next.js's redirect page), no project data; alice's project intact, no audit row added | pass |
+| 52 | `GET /projects/[publicId]` | replay with alice's real token with its last character changed | 307 redirect to /sign-in; body 9535 bytes (Next.js's redirect page), no project data; alice's project intact, no audit row added | pass |
+| 53 | `GET /projects/[publicId]` | replay with an expired session (real row in the database, expires_at one minute ago) | 307 redirect to /sign-in; body 9535 bytes (Next.js's redirect page), no project data; alice's project intact, no audit row added | pass |
+| 54 | `GET /projects/[publicId]` | replay with a session token replayed after the user signed out | 307 redirect to /sign-in; body 9535 bytes (Next.js's redirect page), no project data; alice's project intact, no audit row added | pass |
+| 55 | `DELETE /api/projects/[publicId]` | replay with no session cookie at all | 401 {"error":{"code":"UNAUTHENTICATED","message":"You must be signed in."}}; alice's project intact, no audit row added | pass |
+| 56 | `DELETE /api/projects/[publicId]` | replay with a forged session cookie (random 43-character token) | 401 {"error":{"code":"UNAUTHENTICATED","message":"You must be signed in."}}; alice's project intact, no audit row added | pass |
+| 57 | `DELETE /api/projects/[publicId]` | replay with an empty session cookie value | 401 {"error":{"code":"UNAUTHENTICATED","message":"You must be signed in."}}; alice's project intact, no audit row added | pass |
+| 58 | `DELETE /api/projects/[publicId]` | replay with alice's real token with its last character changed | 401 {"error":{"code":"UNAUTHENTICATED","message":"You must be signed in."}}; alice's project intact, no audit row added | pass |
+| 59 | `DELETE /api/projects/[publicId]` | replay with an expired session (real row in the database, expires_at one minute ago) | 401 {"error":{"code":"UNAUTHENTICATED","message":"You must be signed in."}}; alice's project intact, no audit row added | pass |
+| 60 | `DELETE /api/projects/[publicId]` | replay with a session token replayed after the user signed out | 401 {"error":{"code":"UNAUTHENTICATED","message":"You must be signed in."}}; alice's project intact, no audit row added | pass |
+| 61 | `GET /projects/[publicId]` | no session: compare the response for alice's real public_id with the response for an id that does not exist | both: 307 redirect to /sign-in; identical apart from the id the caller typed: true | pass |
+| 62 | `GET /projects/[publicId]` | a forged session: compare the response for alice's real public_id with the response for an id that does not exist | both: 307 redirect to /sign-in; identical apart from the id the caller typed: true | pass |
+| 63 | `GET /projects` | (follow-up to the expired-session rows) is the expired session still usable or still stored? | expired session row remaining in the database: 0 (deleted the first time it was presented) | pass |
+| 64 | `DELETE /api/projects/[publicId]` | CONTROL: alice deletes her own project | 200 {"next":"/projects"}; project gone: true; audit rows added: 1; row: user_id is alice true, action project.deleted, record_public_id matches true, metadata {"title":"Alice confidential plan"} | pass |
+| 65 | `DELETE /api/projects/[publicId]` | alice repeats the delete of the now-gone project | 403 {"error":{"code":"FORBIDDEN","message":"You don't have access to that project."}}; audit rows added: 0 | pass |
+| 66 | `GET /projects/[publicId]` | bob requests alice's public_id after she deleted the project | 403; page identical to the original wrong-owner page: true | pass |
+| 67 | `GET /projects/[publicId]` | CONTROL: bob can still open his own project after all of the above | 200 | pass |
