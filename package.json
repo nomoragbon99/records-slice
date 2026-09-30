@@ -1,0 +1,44 @@
+{
+  "name": "records-slice",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3004",
+    "build": "next build",
+    "start": "next start -p 3004",
+    "lint": "eslint",
+    "postinstall": "prisma generate",
+    "typecheck": "next typegen && tsc --noEmit",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:migrate": "prisma migrate dev && prisma generate",
+    "// db:studio": "Fixed port 5559: 5555-5558 belong to the other slices, so a shared port would cross-serve data",
+    "db:studio": "prisma studio --port 5559",
+    "db:seed": "tsx --env-file=.env scripts/seed.ts",
+    "check:access": "tsx --env-file=.env scripts/check-access-control.ts"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "^5.9.1",
+    "@node-rs/argon2": "^2.2.1",
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
+    "next": "16.3.5",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-hook-form": "^7.88.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "dotenv": "^17.4.2",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.5",
+    "prisma": "7.10.0",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.13",
+    "typescript": "^5"
+  }
+}
