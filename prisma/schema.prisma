@@ -1,0 +1,115 @@
+// The connection URL lives in prisma.config.ts (Prisma 7 no longer reads it here).
+// snake_case table/column names via @@map/@map so the SQL layer reads naturally in psql;
+// Prisma Client still exposes the usual camelCase field names in TypeScript.
+
+generator client {
+  provider        = "prisma-client"
+  // relationJoins lets a query say relationLoadStrategy: "join", so a session and its user come back
+  // in one SQL statement instead of two (see BUILD_LOG.md).
+  previewFeatures = ["relationJoins"]
+  output          = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  // gen_random_uuid() is a Postgres 18 built-in (no extension needed); giving it a real
+  // database default means the row is valid even if inserted by something other than Prisma.
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  // Stored trimmed and lowercased by the app; CHECK (email = lower(btrim(email))) below is the
+  // actual guarantee, since a raw SQL script or a future bug in the app can't bypass a CHECK.
+  email String @unique
+
+  // Display name shown on the dashboard; length bounds enforced by a CHECK below.
+  name String
+
+  // Argon2id's own encoded output ("$argon2id$v=19$...") is a self-describing text string,
+  // not fixed-width, so it can't be a fixed-length or binary column.
+  passwordHash String @map("password_hash")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  // @default(now()) makes the column correct even for a row Prisma didn't create;
+  // @updatedAt makes Prisma Client bump it on every update through the client.
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  sessions Session[]
+  projects Project[]
+
+  @@map("users")
+}
+
+model Session {
+  // The SHA-256 hex hash of the session token, not a UUID: the raw token lives only in the
+  // cookie, so a leaked database row can never be replayed as a live session.
+  id String @id
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // No expiry would mean a session that never ends; enforces the 7-day fixed lifetime.
+  expiresAt DateTime @map("expires_at") @db.Timestamptz
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  // Looking up / revoking all of one user's sessions is a lookup by user_id.
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Project {
+  // Internal primary key: used for joins and foreign keys only. It never appears in a URL or an
+  // API response (see AGENTS.md); publicId below is what the outside world sees.
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  // The only identifier used in URLs and API responses. A separate random value rather than the
+  // primary key, so exposing it reveals nothing about the internal id. The database default
+  // (a second, independent gen_random_uuid() with the dashes stripped: 32 hex characters, 122
+  // random bits) keeps the row valid even if inserted by something other than Prisma; the CHECK
+  // below keeps it URL-safe and non-empty.
+  publicId String @unique @default(dbgenerated("replace(gen_random_uuid()::text, '-', '')")) @map("public_id")
+
+  // Every query about a project filters by its owner, so this is indexed (see below). CASCADE
+  // means deleting a user can never leave orphaned projects behind.
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Length bounds enforced by a CHECK below.
+  title String
+
+  // Optional free text.
+  description String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  // One composite index serves both the main query pattern (listing one user's own projects
+  // newest first, no separate sort step) and any user_id-only lookup (its leftmost column).
+  @@index([userId, createdAt])
+  @@map("projects")
+}
+
+model AuditLog {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  // Who did it. Deliberately NOT a foreign key to users: an audit trail must outlive the
+  // account it describes, and a cascade here would erase the evidence when a user is deleted.
+  userId String @map("user_id") @db.Uuid
+
+  // What happened, e.g. 'project.deleted'.
+  action String
+
+  // The public_id of the affected record, not its internal id, so the log stays readable after
+  // the row is gone. Deliberately NOT a foreign key to projects: the project row will no longer
+  // exist by the time this row matters.
+  recordPublicId String @map("record_public_id")
+
+  // Anything else worth capturing at the moment of the action (e.g. the deleted title).
+  metadata Json?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("audit_log")
+}
